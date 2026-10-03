@@ -1,0 +1,53 @@
+# ── Stage 1: Dependencies ──────────────────────────────────────
+# Built with: docker buildx build --platform linux/arm64
+FROM --platform=$BUILDPLATFORM node:20-alpine AS deps
+
+WORKDIR /app
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+# ── Stage 2: Build ─────────────────────────────────────────────
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY frontend/ .
+
+# Ensure public/ exists so COPY in runner stage never fails
+RUN mkdir -p public
+
+# NEXT_PUBLIC_API_URL is baked in at build time for static pages
+ARG NEXT_PUBLIC_API_URL=http://localhost:3001
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+RUN npm run build
+
+# ── Stage 3: Production ────────────────────────────────────────
+FROM --platform=$TARGETPLATFORM node:20-alpine AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Next.js standalone output (includes its own node_modules and server.js)
+COPY --from=builder /app/.next/standalone ./
+
+# Static assets served by Next.js
+COPY --from=builder /app/.next/static ./.next/static
+
+# Public assets (dir always exists from builder stage)
+COPY --from=builder /app/public ./public
+
+RUN chown -R appuser:appgroup /app
+
+USER appuser
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

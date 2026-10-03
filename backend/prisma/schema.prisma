@@ -1,0 +1,76 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+  // native        = build machine (local dev)
+  // linux-musl-arm64-openssl-3.0.x = Oracle Ampere A1 (ARM64) + Alpine
+  // linux-musl-openssl-3.0.x       = Intel/AMD64 + Alpine (Hetzner, fallback)
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model ExcelFile {
+  id           String     @id @default(cuid())
+  originalName String
+  storedName   String     @unique
+  mimeType     String
+  sizeBytes    Int
+  uploadedAt   DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  status       FileStatus @default(PENDING)
+  jobs         Job[]
+
+  @@map("excel_files")
+}
+
+model Job {
+  id            String    @id @default(cuid())
+  instruction   String
+  status        JobStatus @default(QUEUED)
+  operationPlan Json?
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+  excelFileId   String
+  excelFile     ExcelFile @relation(fields: [excelFileId], references: [id])
+  operations    Operation[]
+
+  @@map("jobs")
+}
+
+model Operation {
+  id        String          @id @default(cuid())
+  type      String
+  sheet     String
+  params    Json
+  status    OperationStatus @default(PENDING)
+  order     Int
+  createdAt DateTime        @default(now())
+  jobId     String
+  job       Job             @relation(fields: [jobId], references: [id])
+
+  @@map("operations")
+}
+
+enum FileStatus {
+  PENDING
+  PROCESSING
+  DONE
+  ERROR
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum OperationStatus {
+  PENDING
+  EXECUTED
+  FAILED
+}

@@ -1,0 +1,116 @@
+version: '3.9'
+
+# ─────────────────────────────────────────────
+# Networks
+# ─────────────────────────────────────────────
+networks:
+  excel-ai-net:
+    driver: bridge
+
+# ─────────────────────────────────────────────
+# Volumes (persistent data)
+# ─────────────────────────────────────────────
+volumes:
+  postgres-data:
+  valkey-data:
+  uploads-data:
+
+# ─────────────────────────────────────────────
+# Services
+# ─────────────────────────────────────────────
+services:
+
+  # ── PostgreSQL ───────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: excel-ai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-excel_ai_db}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - excel-ai-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Valkey (Redis-compatible) ─────────────
+  valkey:
+    image: valkey/valkey:7-alpine
+    container_name: excel-ai-valkey
+    restart: unless-stopped
+    volumes:
+      - valkey-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - excel-ai-net
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── NestJS Backend ────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    container_name: excel-ai-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-excel_ai_db}
+      VALKEY_URL: redis://valkey:6379
+      VALKEY_HOST: valkey
+      VALKEY_PORT: 6379
+      PORT: 3001
+      CORS_ORIGIN: http://localhost:3000
+    volumes:
+      - uploads-data:/app/uploads
+    ports:
+      - "3001:3001"
+    networks:
+      - excel-ai-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ── Next.js Frontend ──────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        # NEXT_PUBLIC_API_URL is baked into the browser JS bundle at build time.
+        # It must be a URL the user's browser can reach.
+        # Port 3001 is published to the host, so localhost:3001 is accessible.
+        # Do NOT use http://backend:3001 here — that is only reachable inside
+        # the Docker network, not from the browser on the host machine.
+        NEXT_PUBLIC_API_URL: http://localhost:3001
+    container_name: excel-ai-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    networks:
+      - excel-ai-net
+    depends_on:
+      backend:
+        condition: service_healthy

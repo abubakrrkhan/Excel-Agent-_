@@ -1,0 +1,181 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# backend.yaml — NestJS API deployment for Oracle Always Free K3s
+#
+# Resource tuning for Oracle Ampere A1 (ARM64):
+#   Total available: 1 OCPU (≈ 1000m CPU), 6GB RAM
+#   This app's total request: ~600Mi RAM — fits comfortably
+#
+# Startup order:
+#   1. wait-for-postgres   — busybox netcat loop until port 5432 responds
+#   2. prisma-migrate      — runs `prisma migrate deploy` once
+#   3. backend container   — starts the NestJS app
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: excel-ai
+  labels:
+    app: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      initContainers:
+        # Wait until PostgreSQL accepts connections
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL at postgres-svc:5432..."
+              until nc -z postgres-svc 5432; do
+                echo "  not ready — retrying in 3s"
+                sleep 3
+              done
+              echo "PostgreSQL is ready."
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "32Mi"
+              cpu: "50m"
+
+        # Run database migrations before the backend starts
+        - name: prisma-migrate
+          image: excel-ai-backend:latest
+          imagePullPolicy: IfNotPresent
+          command: ["npx", "prisma", "migrate", "deploy"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: excel-ai-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "300m"
+
+      containers:
+        - name: backend
+          image: excel-ai-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: NODE_ENV
+              value: production
+            # CORS_ORIGIN must be the external URL the browser uses
+            # (not the internal service name — that would break CORS)
+            - name: CORS_ORIGIN
+              valueFrom:
+                configMapKeyRef:
+                  name: excel-ai-config
+                  key: EXTERNAL_URL
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: excel-ai-secrets
+                  key: DATABASE_URL
+            - name: AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: excel-ai-secrets
+                  key: AI_API_KEY
+            - name: AI_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: excel-ai-config
+                  key: AI_MODEL
+            - name: AI_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: excel-ai-config
+                  key: AI_BASE_URL
+            - name: VALKEY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: excel-ai-secrets
+                  key: VALKEY_URL
+            - name: FILE_RETENTION_INPUT_HOURS
+              valueFrom:
+                configMapKeyRef:
+                  name: excel-ai-config
+                  key: FILE_RETENTION_INPUT_HOURS
+            - name: FILE_RETENTION_OUTPUT_HOURS
+              valueFrom:
+                configMapKeyRef:
+                  name: excel-ai-config
+                  key: FILE_RETENTION_OUTPUT_HOURS
+          volumeMounts:
+            - name: uploads-storage
+              mountPath: /app/uploads
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "800m"
+
+      volumes:
+        - name: uploads-storage
+          persistentVolumeClaim:
+            claimName: uploads-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-svc
+  namespace: excel-ai
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 3001
+      targetPort: 3001
+---
+# PVC for Excel file uploads and processed outputs.
+# IMPORTANT: If this PVC is deleted, ALL uploaded and generated files are lost.
+# Back up /app/uploads before deleting or recreating this PVC.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uploads-pvc
+  namespace: excel-ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

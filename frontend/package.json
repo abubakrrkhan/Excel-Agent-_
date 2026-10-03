@@ -1,0 +1,24 @@
+{
+  "name": "excel-ai-frontend",
+  "version": "1.0.0",
+  "description": "AI-powered Excel Automation Frontend",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "14",
+    "react": "^18",
+    "react-dom": "^18",
+    "axios": "^1.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18"
+  }
+}

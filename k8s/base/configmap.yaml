@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# configmap.yaml — Non-secret configuration for Excel AI Agent
+#
+# EXTERNAL_URL — the public URL the browser uses to access the app.
+#
+# For Oracle Always Free (no domain):
+#   Use nip.io: http://YOUR-ORACLE-IP.nip.io
+#   Example:    http://130.61.2.15.nip.io
+#
+# For Oracle with a domain:
+#   Example:    http://excel-ai.yourdomain.com
+#
+# This value is used for:
+#   1. CORS_ORIGIN on the backend (must match the browser Origin header)
+#   2. --build-arg NEXT_PUBLIC_API_URL when building the frontend Docker image
+#      (the Makefile handles this automatically)
+#
+# CHANGE THIS before deploying!
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: excel-ai-config
+  namespace: excel-ai
+data:
+  # CHANGE: set to http://YOUR-ORACLE-IP.nip.io
+  EXTERNAL_URL: "http://YOUR-ORACLE-IP.nip.io"
+  AI_MODEL: "claude-sonnet-4-6"
+  AI_BASE_URL: "https://api.anthropic.com"
+  FILE_RETENTION_INPUT_HOURS: "24"
+  FILE_RETENTION_OUTPUT_HOURS: "2"

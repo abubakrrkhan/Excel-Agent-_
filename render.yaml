@@ -9,8 +9,8 @@ databases:
     user: excel_ai_user
 
 services:
-  # ── Redis (Valkey-compatible) ──────────────────────────────────────────────
-  - type: redis
+  # ── Redis (Key-Value) ──────────────────────────────────────────────────────
+  - type: keyvalue
     name: excel-ai-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
@@ -38,7 +38,7 @@ services:
       - key: REDIS_URL
         fromService:
           name: excel-ai-redis
-          type: redis
+          type: keyvalue
           property: connectionString
       - key: CORS_ORIGIN
         fromService:

@@ -61,8 +61,8 @@ Open http://localhost:3000
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `AI_API_KEY` | Yes | Anthropic API key (`sk-ant-...`) |
-| `AI_MODEL` | No | Default: `claude-sonnet-4-6` |
+| `AI_API_KEY` | Yes | Google Gemini API key (`AIza...`) — free at https://aistudio.google.com/apikey |
+| `AI_MODEL` | No | Default: `gemini-2.0-flash` (free tier) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `REDIS_URL` | Railway | Set automatically by Railway Redis plugin. Takes priority over `VALKEY_URL`. |
 | `VALKEY_URL` | Self-hosted | Redis/Valkey URL for Docker or bare-metal (`redis://...`). Used when `REDIS_URL` is absent. |
@@ -154,6 +154,14 @@ npm run typecheck  # TypeScript check
 npm run build      # production build
 ```
 
-## Railway Deployment
+## Deployment (Render.com)
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for step-by-step Railway deployment instructions.
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/abubakrrkhan/Excel-Agent-_)
+
+**One-click deploy** creates all 4 services automatically:
+- PostgreSQL (`excel-ai-db`) — free
+- Redis (`excel-ai-redis`) — free  
+- NestJS Backend (`excel-ai-backend`) — free
+- Next.js Frontend (`excel-ai-frontend`) — free
+
+**After deploy:** Go to `excel-ai-backend` → Environment → set `AI_API_KEY` to your [Gemini API key](https://aistudio.google.com/apikey).

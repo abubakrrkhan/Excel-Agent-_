@@ -70,6 +70,18 @@ function truncate(s: string, n = 28) {
   return s.length > n ? s.slice(0, n) + '…' : s;
 }
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    setIsMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isMobile;
+}
+
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
 const Icon = {
@@ -129,6 +141,11 @@ const Icon = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z"/>
     </svg>
   ),
+  menu: (
+    <svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5"/>
+    </svg>
+  ),
 };
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
@@ -184,30 +201,54 @@ function ClarificationPanel({ question, candidates, onAnswer, t }: { question: s
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
 
-function Sidebar({ history, activeId, onNew, isDark, onToggleTheme, t }: {
+function Sidebar({ history, activeId, onNew, isDark, onToggleTheme, t, isMobile, isOpen, onClose }: {
   history: HistoryItem[];
   activeId: string | null;
   onNew: () => void;
   isDark: boolean;
   onToggleTheme: () => void;
   t: Theme;
+  isMobile: boolean;
+  isOpen: boolean;
+  onClose: () => void;
 }) {
   const grouped = {
     today: history.filter(h => Date.now() - h.timestamp < 86400000),
     earlier: history.filter(h => Date.now() - h.timestamp >= 86400000),
   };
 
+  const sidebarStyle: React.CSSProperties = isMobile
+    ? {
+        position: 'fixed', top: 0, left: 0, bottom: 0, width: 280,
+        maxWidth: '85vw', zIndex: 50, background: t.sidebar,
+        display: 'flex', flexDirection: 'column', height: '100vh',
+        borderRight: `1px solid ${t.borderSubtle}`,
+        transform: isOpen ? 'translateX(0)' : 'translateX(-100%)',
+        transition: 'transform 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
+        boxShadow: isOpen ? '4px 0 25px rgba(0,0,0,0.4)' : 'none',
+      }
+    : {
+        width: 260, flexShrink: 0, background: t.sidebar,
+        display: 'flex', flexDirection: 'column', height: '100vh',
+        borderRight: `1px solid ${t.borderSubtle}`,
+      };
+
   return (
-    <aside style={{ width: 260, flexShrink: 0, background: t.sidebar, display: 'flex', flexDirection: 'column', height: '100vh', borderRight: `1px solid ${t.borderSubtle}` }}>
+    <aside style={sidebarStyle}>
       {/* Logo */}
       <div style={{ padding: '16px 14px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
         <span style={{ color: '#10a37f' }}>{Icon.grid}</span>
-        <span style={{ fontSize: 15, fontWeight: 600, color: t.text }}>Excel AI Agent</span>
+        <span style={{ fontSize: 15, fontWeight: 600, color: t.text, flex: 1 }}>Excel AI Agent</span>
+        {isMobile && (
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', padding: 4 }}>
+            {Icon.x}
+          </button>
+        )}
       </div>
 
       {/* New task */}
       <div style={{ padding: '4px 10px 12px' }}>
-        <button onClick={onNew}
+        <button onClick={() => { onNew(); if (isMobile) onClose(); }}
           style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderRadius: 8, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)', border: `1px solid ${t.border}`, color: t.text, fontSize: 13, cursor: 'pointer', transition: 'background 0.15s' }}
           onMouseEnter={e => (e.currentTarget.style.background = t.btnHover)}
           onMouseLeave={e => (e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')}
@@ -285,6 +326,8 @@ function HistoryRow({ item, active, t }: { item: HistoryItem; active: boolean; t
 export default function Home() {
   const [isDark, setIsDark] = useState(true);
   const t = isDark ? DARK : LIGHT;
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [file, setFile] = useState<SelectedFile | null>(null);
   const [instruction, setInstruction] = useState('');
@@ -405,17 +448,34 @@ export default function Home() {
         body { background: ${t.bg}; color: ${t.text}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
       `}</style>
 
+      {/* Mobile sidebar backdrop */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)', zIndex: 45 }}
+        />
+      )}
+
       <div style={{ display: 'flex', height: '100vh', background: t.bg, overflow: 'hidden' }}>
 
         {/* ── Sidebar ── */}
-        <Sidebar history={history} activeId={jobId} onNew={reset} isDark={isDark} onToggleTheme={toggleTheme} t={t} />
+        <Sidebar history={history} activeId={jobId} onNew={reset} isDark={isDark} onToggleTheme={toggleTheme} t={t} isMobile={isMobile} isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
         {/* ── Main ── */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
 
           {/* Top bar */}
           <div style={{ flexShrink: 0, padding: '14px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: `1px solid ${t.borderSubtle}`, minHeight: 52 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Mobile hamburger — only visible on mobile */}
+              {isMobile && (
+                <button
+                  onClick={() => setSidebarOpen(true)}
+                  style={{ background: 'none', border: 'none', color: t.text, cursor: 'pointer', padding: 4, marginRight: 4, display: 'flex', alignItems: 'center' }}
+                >
+                  {Icon.menu}
+                </button>
+              )}
               {isActive && (
                 <>
                   <div style={{ width: 6, height: 6, borderRadius: '50%', background: isProcessing ? '#f59e0b' : stage === 'completed' ? '#10a37f' : t.textMuted }} />
@@ -437,33 +497,63 @@ export default function Home() {
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
             {!isActive ? (
               /* Idle */
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 24px 120px' }}>
-                <h1 style={{ fontSize: 28, fontWeight: 500, color: t.text, marginBottom: 32, letterSpacing: '-0.02em' }}>
-                  Ready when you are.
-                </h1>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 480 }}>
-                  {['Update Management Fee to 1.5% on Fund Details sheet', 'Analyze the fee structure across all sheets', 'Add a new row for Q4 with value 25.3 in column C'].map((s, i) => (
-                    <button key={i} onClick={() => { setInstruction(s); textareaRef.current?.focus(); }}
-                      style={{ textAlign: 'left', padding: '10px 14px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.card, color: t.textSecondary, fontSize: 13, cursor: 'pointer', transition: 'all 0.12s' }}
-                      onMouseEnter={e => { e.currentTarget.style.borderColor = isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.2)'; e.currentTarget.style.color = t.text; }}
-                      onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.color = t.textSecondary; }}
-                    >{s}</button>
-                  ))}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: isMobile ? '30px 16px 80px' : '40px 24px 120px' }}>
+                <div style={{ width: 56, height: 56, borderRadius: 16, background: isDark ? 'rgba(16, 163, 127, 0.12)' : 'rgba(16, 163, 127, 0.08)', border: '1px solid rgba(16, 163, 127, 0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20, color: '#10a37f' }}>
+                  <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+                    <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+                  </svg>
                 </div>
+                <h1 style={{ fontSize: isMobile ? 22 : 28, fontWeight: 600, color: t.text, marginBottom: 10, letterSpacing: '-0.02em', textAlign: 'center' }}>
+                  Excel AI Agent
+                </h1>
+                <p style={{ fontSize: isMobile ? 13 : 14, color: t.textSecondary, maxWidth: 460, textAlign: 'center', lineHeight: 1.6, marginBottom: 24, padding: '0 8px' }}>
+                  Attach your Excel workbook and describe your changes in <strong>any language</strong> (English, Urdu, etc.). The AI agent inspects your workbook and applies changes safely.
+                </p>
+                 {!file ? (
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '12px 22px',
+                      borderRadius: 12,
+                      background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                      border: `1px dashed ${t.border}`,
+                      color: t.text,
+                      fontSize: 13,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = '#10a37f'; e.currentTarget.style.color = '#10a37f'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.color = t.text; }}
+                  >
+                    <span style={{ color: '#10a37f' }}>{Icon.file}</span>
+                    <span>Upload Excel file (.xlsx)</span>
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', background: t.card, border: '1px solid #10a37f', borderRadius: 10 }}>
+                    <span style={{ color: '#10a37f' }}>{Icon.file}</span>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: t.text }}>{file.name}</span>
+                    <span style={{ fontSize: 12, color: t.textMuted }}>({formatBytes(file.sizeBytes)})</span>
+                  </div>
+                )}
               </div>
             ) : (
               /* Active task */
-              <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '32px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: isMobile ? '20px 14px' : '32px 24px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
                 {/* User bubble */}
-                <div style={{ alignSelf: 'flex-end', maxWidth: '80%', background: t.card, border: `1px solid ${t.border}`, borderRadius: '16px 16px 4px 16px', padding: '12px 16px' }}>
+                <div style={{ alignSelf: 'flex-end', maxWidth: isMobile ? '92%' : '80%', background: t.card, border: `1px solid ${t.border}`, borderRadius: '16px 16px 4px 16px', padding: '12px 16px' }}>
                   {file && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '6px 10px', background: t.bg, borderRadius: 7, border: `1px solid ${t.border}`, width: 'fit-content' }}>
-                      <span style={{ color: '#10a37f' }}>{Icon.file}</span>
-                      <span style={{ fontSize: 12, color: t.textSecondary }}>{file.name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '6px 10px', background: t.bg, borderRadius: 7, border: `1px solid ${t.border}`, width: 'fit-content', maxWidth: '100%' }}>
+                      <span style={{ color: '#10a37f', flexShrink: 0 }}>{Icon.file}</span>
+                      <span style={{ fontSize: 12, color: t.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
                     </div>
                   )}
-                  <p style={{ fontSize: 14, color: t.text, lineHeight: 1.5 }}>{instruction}</p>
+                  <p style={{ fontSize: 14, color: t.text, lineHeight: 1.5, wordBreak: 'break-word' }}>{instruction}</p>
                 </div>
 
                 {/* Agent response */}
@@ -473,7 +563,7 @@ export default function Home() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1 1 .03 2.798-1.442 2.798H4.24c-1.472 0-2.441-1.798-1.442-2.798L4.2 15.3"/>
                     </svg>
                   </div>
-                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
 
                     {isProcessing && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -509,15 +599,15 @@ export default function Home() {
                             <p style={{ fontSize: 13, color: t.textSecondary }}>{jobResult.operationSummary}</p>
                           </div>
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr 1fr' : 'repeat(3, 1fr)', gap: isMobile ? 6 : 8 }}>
                           {[
                             { label: 'Writes applied', value: jobResult.writeOpsApplied ?? '—' },
                             { label: 'Agent rounds', value: jobResult.agentRoundsUsed ?? '—' },
                             { label: 'Tool calls', value: jobResult.agentToolCallsMade ?? '—' },
                           ].map(({ label, value }) => (
-                            <div key={label} style={{ background: t.bg, border: `1px solid ${t.borderSubtle}`, borderRadius: 8, padding: '10px 12px', textAlign: 'center' }}>
-                              <p style={{ fontSize: 18, fontWeight: 600, color: t.text, marginBottom: 3 }}>{value}</p>
-                              <p style={{ fontSize: 11, color: t.textMuted }}>{label}</p>
+                            <div key={label} style={{ background: t.bg, border: `1px solid ${t.borderSubtle}`, borderRadius: 8, padding: isMobile ? '8px 6px' : '10px 12px', textAlign: 'center' }}>
+                              <p style={{ fontSize: isMobile ? 16 : 18, fontWeight: 600, color: t.text, marginBottom: 3 }}>{value}</p>
+                              <p style={{ fontSize: isMobile ? 10 : 11, color: t.textMuted }}>{label}</p>
                             </div>
                           ))}
                         </div>
@@ -548,16 +638,16 @@ export default function Home() {
           </div>
 
           {/* ── Bottom input bar ── */}
-          <div style={{ flexShrink: 0, padding: '12px 20px 16px', borderTop: `1px solid ${t.borderSubtle}` }}>
+          <div style={{ flexShrink: 0, padding: isMobile ? '10px 12px 14px' : '12px 20px 16px', borderTop: `1px solid ${t.borderSubtle}` }}>
             <div style={{ maxWidth: 680, margin: '0 auto' }}>
 
               {file && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: t.card, border: `1px solid ${t.border}`, borderRadius: 10, marginBottom: 8 }}>
-                  <span style={{ color: '#10a37f' }}>{Icon.file}</span>
-                  <span style={{ fontSize: 13, color: t.textSecondary, flex: 1 }}>{file.name}</span>
-                  <span style={{ fontSize: 12, color: t.textMuted, marginRight: 8 }}>{formatBytes(file.sizeBytes)}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px', background: t.card, border: `1px solid ${t.border}`, borderRadius: 10, marginBottom: 8, minWidth: 0 }}>
+                  <span style={{ color: '#10a37f', flexShrink: 0 }}>{Icon.file}</span>
+                  <span style={{ fontSize: 13, color: t.textSecondary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{file.name}</span>
+                  <span style={{ fontSize: 12, color: t.textMuted, marginRight: 8, flexShrink: 0 }}>{formatBytes(file.sizeBytes)}</span>
                   {!isProcessing && (
-                    <button onClick={() => { setFile(null); setStage('idle'); }} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', display: 'flex', padding: 2, borderRadius: 4 }}
+                    <button onClick={() => { setFile(null); setStage('idle'); }} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', display: 'flex', padding: 2, borderRadius: 4, flexShrink: 0 }}
                       onMouseEnter={e => (e.currentTarget.style.color = t.textSecondary)}
                       onMouseLeave={e => (e.currentTarget.style.color = t.textMuted)}
                     >{Icon.x}</button>
@@ -584,7 +674,7 @@ export default function Home() {
                   onChange={e => { setInstruction(e.target.value); if (file && e.target.value.trim()) setStage('ready'); }}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(); } }}
                   disabled={isProcessing}
-                  placeholder={file ? 'Tell the agent what to do... (Enter to submit)' : 'Attach an Excel file first, then describe what to do...'}
+                  placeholder={file ? 'Describe your Excel changes in any language (English, Urdu, etc.)... (Enter to submit)' : 'Attach an Excel file first, then describe what changes you want to make...'}
                   rows={1}
                   style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 14, color: t.text, resize: 'none', lineHeight: 1.5, paddingTop: 7, paddingBottom: 7, maxHeight: 120, opacity: isProcessing ? 0.5 : 1, overflowY: 'auto' }}
                   onInput={e => { const el = e.currentTarget; el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }}

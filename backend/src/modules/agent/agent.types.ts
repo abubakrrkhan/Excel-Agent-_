@@ -188,5 +188,5 @@ export const INSPECTION_ONLY_ROUNDS = 3;
  */
 export function isComplexWorkbook(workbookInfo: { sheetCount: number; sheets: Array<{ dataRowCount: number }> }): boolean {
   const totalRows = workbookInfo.sheets.reduce((sum, s) => sum + (s.dataRowCount || 0), 0);
-  return workbookInfo.sheetCount >= 3 || totalRows >= 500;
+  return workbookInfo.sheetCount >= 2 || totalRows >= 200;
 }

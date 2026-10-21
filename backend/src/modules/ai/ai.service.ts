@@ -136,25 +136,38 @@ export class AiService {
     }
 
     try {
+      // Build Gemini contents from conversation turns
+      const geminiContents = [];
+
+      // Add system instruction as first user message if present
+      if (systemMsg?.content) {
+        geminiContents.push({ role: 'user', parts: [{ text: systemMsg.content }] });
+        geminiContents.push({ role: 'model', parts: [{ text: 'Understood. I will follow these instructions.' }] });
+      }
+
+      for (const turn of turns) {
+        geminiContents.push({
+          role: turn.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: turn.content }],
+        });
+      }
+
       const response = await axios.post(
-        `${baseUrl}/v1/messages`,
+        `${baseUrl}/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
-          model,
-          max_tokens: 4096,
-          system: systemMsg?.content ?? '',
-          messages: turns,
+          contents: geminiContents,
+          generationConfig: {
+            maxOutputTokens: 4096,
+            temperature: 0.1,
+          },
         },
         {
-          headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-          },
+          headers: { 'content-type': 'application/json' },
           timeout: AI_TIMEOUT_MS,
         },
       );
 
-      const raw: string = response.data?.content?.[0]?.text ?? '';
+      const raw: string = response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
       if (!raw) {
         throw new InternalServerErrorException('AI agent returned empty response');
       }
@@ -173,8 +186,8 @@ export class AiService {
       if (axiosErr.code === 'ECONNABORTED' || axiosErr.code === 'ETIMEDOUT') {
         throw new ServiceUnavailableException('AI agent request timed out');
       }
-      if (axiosErr.response?.status === 401) {
-        throw new ServiceUnavailableException('AI provider authentication failed');
+      if (axiosErr.response?.status === 400) {
+        throw new ServiceUnavailableException('AI provider rejected the request. Check AI_API_KEY.');
       }
       throw new ServiceUnavailableException(
         `AI agent call failed: ${axiosErr.message ?? 'unknown error'}`,
@@ -214,6 +227,69 @@ export class AiService {
         reasoning: `Unknown response type: ${type}`,
         reason: 'AI returned an unknown response type. Please try again.',
       };
+    }
+
+    // ── Tool call validation ───────────────────────────────────────────────
+    if (type === 'tool_call') {
+      const validTools = [
+        'inspect_sheet_structure',
+        'detect_headers',
+        'detect_sections',
+        'get_cell_context',
+        'search_workbook',
+        'resolve_label',
+      ];
+      if (!parsed.tool || !validTools.includes(parsed.tool)) {
+        this.logger.warn(`AI requested unknown tool "${parsed.tool}". Prompting re-evaluation.`);
+        return {
+          type: 'cannot_proceed',
+          reasoning: `AI attempted to call unknown tool: ${parsed.tool}`,
+          reason: `AI requested an unavailable inspection tool (${parsed.tool}). Please retry.`,
+        };
+      }
+      if (!parsed.params || typeof parsed.params !== 'object') {
+        parsed.params = {};
+      }
+    }
+
+    // ── Final plan validation & confidence gate ────────────────────────────
+    if (type === 'final_plan') {
+      if (!parsed.plan || !Array.isArray(parsed.plan.operations)) {
+        this.logger.warn('AI final_plan missing valid plan or operations array');
+        return {
+          type: 'cannot_proceed',
+          reasoning: 'AI produced final_plan without operations array',
+          reason: 'AI produced an invalid plan structure. Please try again with a clearer instruction.',
+        };
+      }
+
+      // Enforce Confidence Gate: if AI reported confidence < 8, reject as final_plan
+      if (parsed.confidence !== undefined && Number(parsed.confidence) < 8) {
+        this.logger.warn(`Agent produced final_plan with confidence ${parsed.confidence} (< 8). Converting to clarification_required.`);
+        return {
+          type: 'clarification_required',
+          reasoning: parsed.reasoning || `Confidence score ${parsed.confidence} is below required threshold 8`,
+          question: `The agent identified potential changes but has confidence ${parsed.confidence}/10. Please clarify the exact location or sheet you would like to edit.`,
+          candidates: parsed.plan.operations.map((op: any) => `${op.type} on "${op.sheet || 'unknown'}"`),
+        };
+      }
+    }
+
+    // ── Clarification validation ───────────────────────────────────────────
+    if (type === 'clarification_required') {
+      if (!parsed.question || typeof parsed.question !== 'string') {
+        parsed.question = 'Could you please clarify which cell or sheet you would like to update?';
+      }
+      if (!Array.isArray(parsed.candidates)) {
+        parsed.candidates = [];
+      }
+    }
+
+    // ── Cannot proceed validation ──────────────────────────────────────────
+    if (type === 'cannot_proceed') {
+      if (!parsed.reason || typeof parsed.reason !== 'string') {
+        parsed.reason = 'Unable to safely fulfill the instruction on this workbook.';
+      }
     }
 
     return parsed as import('../agent/agent.types').AgentRoundResponse;
@@ -257,24 +333,25 @@ export class AiService {
   }): Promise<string> {
     try {
       const response = await axios.post(
-        `${params.baseUrl}/v1/messages`,
+        `${params.baseUrl}/v1beta/models/${params.model}:generateContent?key=${params.apiKey}`,
         {
-          model: params.model,
-          max_tokens: 2048,
-          system: params.systemPrompt,
-          messages: [{ role: 'user', content: params.userPrompt }],
+          contents: [
+            { role: 'user', parts: [{ text: params.systemPrompt }] },
+            { role: 'model', parts: [{ text: 'Understood. I will follow these instructions and return only valid JSON.' }] },
+            { role: 'user', parts: [{ text: params.userPrompt }] },
+          ],
+          generationConfig: {
+            maxOutputTokens: 2048,
+            temperature: 0.1,
+          },
         },
         {
-          headers: {
-            'x-api-key': params.apiKey,
-            'anthropic-version': '2023-06-01',
-            'content-type': 'application/json',
-          },
+          headers: { 'content-type': 'application/json' },
           timeout: AI_TIMEOUT_MS,
         },
       );
 
-      const text: string = response.data?.content?.[0]?.text ?? '';
+      const text: string = response.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
       if (!text) {
         throw new InternalServerErrorException(
           'AI provider returned an empty response',
@@ -308,9 +385,9 @@ export class AiService {
           JSON.stringify(axiosErr.response.data),
         );
 
-        if (status === 401) {
+        if (status === 400) {
           throw new ServiceUnavailableException(
-            'AI provider authentication failed. Check AI_API_KEY.',
+            'AI provider rejected the request. Check AI_API_KEY and AI_MODEL.',
           );
         }
         if (status === 429) {
@@ -403,6 +480,10 @@ REQUIRED JSON STRUCTURE:
     }
   ]
 }
+
+MULTILINGUAL INSTRUCTION SUPPORT:
+You MUST understand and correctly handle user instructions in ANY language (including English, Urdu, Hindi, Arabic, Spanish, French, German, Chinese, and others).
+Even if the instruction is in Urdu ("Sheet 1 mein Column B ka total nikal do", "Management Fee ko 1.5% kar do") or Hindi or Arabic, parse the intent accurately, identify the target sheets and cell labels, and generate the proper operations plan.
 
 INSPECT-FIRST PRINCIPLE (IMPORTANT FOR COMPLEX WORKBOOKS):
 For financial/fund reports with multiple sheets, merged headers, or repeated labels,

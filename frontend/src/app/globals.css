@@ -1,6 +1,6 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; overflow: hidden; }
-body { background: #0a0a0a; color: #ececec; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+html, body { height: 100%; height: 100dvh; overflow: hidden; -webkit-text-size-adjust: 100%; }
+body { background: #0a0a0a; color: #ececec; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 ::placeholder { color: #4d4d4d; }
 :focus { outline: none; }
 textarea, input { font-family: inherit; }

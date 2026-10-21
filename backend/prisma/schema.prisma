@@ -1,9 +1,10 @@
 generator client {
   provider      = "prisma-client-js"
-  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
   // native        = build machine (local dev)
   // linux-musl-arm64-openssl-3.0.x = Oracle Ampere A1 (ARM64) + Alpine
   // linux-musl-openssl-3.0.x       = Intel/AMD64 + Alpine (Hetzner, fallback)
+  // debian-openssl-3.0.x           = Render.com (Debian/Ubuntu)
 }
 
 datasource db {

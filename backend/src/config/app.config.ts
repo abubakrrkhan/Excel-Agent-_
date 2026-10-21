@@ -29,8 +29,8 @@ export default registerAs('app', () => ({
 
   ai: {
     apiKey: process.env.AI_API_KEY,
-    model: process.env.AI_MODEL || 'claude-sonnet-4-6',
-    baseUrl: process.env.AI_BASE_URL || 'https://api.anthropic.com',
+    model: process.env.AI_MODEL || 'gemini-2.0-flash',
+    baseUrl: process.env.AI_BASE_URL || 'https://generativelanguage.googleapis.com',
   },
 
   cleanup: {

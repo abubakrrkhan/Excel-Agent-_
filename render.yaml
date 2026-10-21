@@ -1,0 +1,69 @@
+# ─── Render.com Blueprint ─────────────────────────────────────────────────────
+# Deploy all services with one click: https://render.com/deploy
+# ──────────────────────────────────────────────────────────────────────────────
+
+databases:
+  - name: excel-ai-db
+    plan: free
+    databaseName: excel_ai_db
+    user: excel_ai_user
+
+services:
+  # ── Redis (Valkey-compatible) ──────────────────────────────────────────────
+  - type: redis
+    name: excel-ai-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+  # ── NestJS Backend ─────────────────────────────────────────────────────────
+  - type: web
+    name: excel-ai-backend
+    runtime: node
+    plan: free
+    nodeVersion: "20"
+    rootDir: backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npx prisma db push && npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        fromDatabase:
+          name: excel-ai-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: excel-ai-redis
+          type: redis
+          property: connectionString
+      - key: CORS_ORIGIN
+        fromService:
+          name: excel-ai-frontend
+          type: web
+          property: url
+      - key: AI_API_KEY
+        sync: false  # You'll set this manually in Render dashboard
+      - key: AI_MODEL
+        value: gemini-2.0-flash
+      - key: AI_BASE_URL
+        value: https://generativelanguage.googleapis.com
+
+  # ── Next.js Frontend ───────────────────────────────────────────────────────
+  - type: web
+    name: excel-ai-frontend
+    runtime: node
+    plan: free
+    nodeVersion: "20"
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: excel-ai-backend
+          type: web
+          property: url

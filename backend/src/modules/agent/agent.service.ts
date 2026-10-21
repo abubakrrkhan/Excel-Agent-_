@@ -79,6 +79,71 @@ export class AgentService {
     const toolHistory: AgentToolResult[] = [];
     const conversation: AgentMessage[] = [];
 
+    // ── Evidence Registry (anti-hallucination) ────────────────────────────
+    // Track every coordinate + sheet discovered by tool results.
+    // Before accepting a final_plan, verify all write targets exist here.
+    const discoveredCoordinates = new Set<string>(); // format: "SheetName::A1"
+    const discoveredSheets = new Set<string>();
+
+    const registerEvidence = (toolName: string, result: Record<string, any>) => {
+      // Extract coordinates from tool results and add to evidence registry
+      if (toolName === 'search_workbook') {
+        for (const m of result.matches ?? []) {
+          if (m.sheetName && m.coordinate) {
+            discoveredCoordinates.add(`${m.sheetName}::${m.coordinate}`);
+            discoveredSheets.add(m.sheetName);
+          }
+        }
+      } else if (toolName === 'get_cell_context') {
+        if (result.sheetName) discoveredSheets.add(result.sheetName);
+        if (result.targetCell?.coordinate && result.sheetName) {
+          discoveredCoordinates.add(`${result.sheetName}::${result.targetCell.coordinate}`);
+        }
+        // Register all cells in context
+        for (const c of result.cells ?? []) {
+          if (c.coordinate && result.sheetName) {
+            discoveredCoordinates.add(`${result.sheetName}::${c.coordinate}`);
+          }
+        }
+        for (const c of result.rowLabels ?? []) {
+          if (c.coordinate && result.sheetName) {
+            discoveredCoordinates.add(`${result.sheetName}::${c.coordinate}`);
+          }
+        }
+        for (const c of result.colLabels ?? []) {
+          if (c.coordinate && result.sheetName) {
+            discoveredCoordinates.add(`${result.sheetName}::${c.coordinate}`);
+          }
+        }
+      } else if (toolName === 'resolve_label') {
+        if (result.resolvedTarget?.sheetName && result.resolvedTarget?.valueCoordinate) {
+          discoveredCoordinates.add(`${result.resolvedTarget.sheetName}::${result.resolvedTarget.valueCoordinate}`);
+          discoveredSheets.add(result.resolvedTarget.sheetName);
+        }
+        if (result.resolvedTarget?.sheetName && result.resolvedTarget?.labelCoordinate) {
+          discoveredCoordinates.add(`${result.resolvedTarget.sheetName}::${result.resolvedTarget.labelCoordinate}`);
+        }
+        for (const c of result.candidates ?? []) {
+          if (c.sheetName && c.valueCoordinate) {
+            discoveredCoordinates.add(`${c.sheetName}::${c.valueCoordinate}`);
+            discoveredSheets.add(c.sheetName);
+          }
+          if (c.sheetName && c.labelCoordinate) {
+            discoveredCoordinates.add(`${c.sheetName}::${c.labelCoordinate}`);
+          }
+        }
+      } else if (toolName === 'detect_sections') {
+        if (result.sheetName) discoveredSheets.add(result.sheetName);
+        for (const s of result.sections ?? []) {
+          if (s.startCoordinate && result.sheetName) {
+            discoveredCoordinates.add(`${result.sheetName}::${s.startCoordinate}`);
+          }
+        }
+      } else if (toolName === 'detect_headers' || toolName === 'inspect_sheet_structure') {
+        if (result.sheetName) discoveredSheets.add(result.sheetName);
+      }
+    };
+
     const log = (msg: string) => {
       this.logger.log(`[Agent] ${msg}`);
       activityLog.push(msg);
@@ -151,7 +216,61 @@ export class AgentService {
           });
           continue;
         }
+
+        // ── ANTI-HALLUCINATION GATE 1: Require at least one tool call ─────
+        if (toolCallsMade === 0) {
+          log(`Plan rejected: no tool calls made before final plan — forcing inspection`);
+          conversation.push({
+            role: 'assistant',
+            content: JSON.stringify({ type: 'final_plan', plan: roundResponse.plan }),
+          });
+          conversation.push({
+            role: 'user',
+            content: `REJECTED: You produced a plan without calling ANY inspection tools first. You MUST call search_workbook or get_cell_context to verify cell locations before producing a plan. Start by searching for the key terms in the instruction.`,
+          });
+          continue;
+        }
+
+        // ── ANTI-HALLUCINATION GATE 2: Coordinate evidence check ──────────
+        // Verify every write target's sheet was actually inspected
+        const writeOps = roundResponse.plan.operations.filter(
+          op => ['SET_CELL', 'SET_CELL_RANGE', 'ADD_ROW', 'DELETE_ROW', 'ADD_FORMULA', 'FORMAT_CELL', 'ADD_COLUMN_HEADER'].includes(op.type)
+        );
+        const unverifiedOps: string[] = [];
+        for (const op of writeOps) {
+          if (op.sheet && !discoveredSheets.has(op.sheet)) {
+            unverifiedOps.push(`${op.type} on sheet "${op.sheet}" — this sheet was never inspected`);
+          }
+          // For SET_CELL, verify the specific coordinate was seen
+          if (op.type === 'SET_CELL' && op.params?.row && op.params?.col && op.sheet) {
+            let colLetter = '';
+            let c = op.params.col;
+            while (c > 0) {
+              colLetter = String.fromCharCode(64 + (c % 26 || 26)) + colLetter;
+              c = Math.floor((c - 1) / 26);
+            }
+            const coord = `${op.sheet}::${colLetter}${op.params.row}`;
+            if (!discoveredCoordinates.has(coord)) {
+              unverifiedOps.push(`SET_CELL at ${colLetter}${op.params.row} on "${op.sheet}" — this coordinate was never returned by any tool`);
+            }
+          }
+        }
+
+        if (unverifiedOps.length > 0) {
+          log(`Plan rejected: ${unverifiedOps.length} unverified coordinate(s) — forcing re-inspection`);
+          conversation.push({
+            role: 'assistant',
+            content: JSON.stringify({ type: 'final_plan', plan: roundResponse.plan }),
+          });
+          conversation.push({
+            role: 'user',
+            content: `REJECTED — HALLUCINATION DETECTED: The following operations reference coordinates that were NOT returned by any tool in this session:\n${unverifiedOps.map(u => `• ${u}`).join('\n')}\n\nYou MUST call search_workbook or get_cell_context to discover the actual coordinates before producing a plan. Do NOT guess or assume coordinates. Call a tool now.`,
+          });
+          continue;
+        }
+
         log(`Agent produced final plan: ${roundResponse.plan.summary}`);
+        log(`Evidence check passed — ${discoveredCoordinates.size} verified coordinate(s)`);
         log(`Validating plan (${roundResponse.plan.operations.length} operation(s))...`);
 
         try {
@@ -168,6 +287,56 @@ export class AgentService {
             content: `The plan failed validation: ${err.message}. Please revise the plan to fix this issue.`,
           });
           continue; // another round
+        }
+
+        // ── ANTI-HALLUCINATION GATE 3: Post-plan verification ─────────────
+        // For each SET_CELL target, call get_cell_context to verify the cell
+        // actually contains what the AI expects (current value, not formula, etc.)
+        const setCellOps = roundResponse.plan.operations.filter(op => op.type === 'SET_CELL');
+        if (setCellOps.length > 0 && setCellOps.length <= 5) {
+          let verificationFailed = false;
+          const verificationErrors: string[] = [];
+
+          for (const op of setCellOps) {
+            if (!op.params?.row || !op.params?.col || !op.sheet) continue;
+            let colLetter = '';
+            let c = op.params.col;
+            while (c > 0) {
+              colLetter = String.fromCharCode(64 + (c % 26 || 26)) + colLetter;
+              c = Math.floor((c - 1) / 26);
+            }
+            const coordinate = `${colLetter}${op.params.row}`;
+            try {
+              const cellCtx = await this.structureService.getCellContext(
+                buffer, op.sheet, coordinate, { rowRadius: 1, colRadius: 1 },
+              );
+              // Check if target cell has a formula that shouldn't be overwritten
+              if (cellCtx.targetCell?.type === 'formula' && !op.params.allowFormulaOverwrite) {
+                verificationFailed = true;
+                verificationErrors.push(
+                  `${coordinate} on "${op.sheet}" contains formula "${cellCtx.targetCell.formula}" but allowFormulaOverwrite is not set`,
+                );
+              }
+            } catch {
+              // Non-fatal — if verification fails, log but allow (the sheet/cell might not exist)
+              verificationErrors.push(`Could not verify ${coordinate} on "${op.sheet}" — sheet or coordinate may be invalid`);
+              verificationFailed = true;
+            }
+          }
+
+          if (verificationFailed) {
+            log(`Post-plan verification found issues: ${verificationErrors.join('; ')}`);
+            conversation.push({
+              role: 'assistant',
+              content: JSON.stringify({ type: 'final_plan', plan: roundResponse.plan }),
+            });
+            conversation.push({
+              role: 'user',
+              content: `POST-PLAN VERIFICATION FAILED:\n${verificationErrors.map(e => `• ${e}`).join('\n')}\n\nRevise your plan to address these issues. If a cell contains a formula, ask the user before overwriting. If a coordinate is invalid, re-inspect to find the correct one.`,
+            });
+            continue;
+          }
+          log(`Post-plan verification passed for ${setCellOps.length} SET_CELL operation(s)`);
         }
 
         log(`Plan validated successfully — ${roundResponse.plan.operations.length} operation(s)`);
@@ -248,6 +417,11 @@ export class AgentService {
         const toolResult = await this.executeTool(buffer, roundResponse.tool, roundResponse.params);
         toolHistory.push(toolResult);
         toolCallsMade++;
+
+        // Register discovered evidence from successful tool results
+        if (toolResult.success) {
+          registerEvidence(roundResponse.tool, toolResult.result);
+        }
 
         if (toolResult.success) {
           log(`  → Tool succeeded`);
@@ -511,9 +685,16 @@ export class AgentService {
             value: c.value,
             type: c.type,
           })),
+          // Include adjacent cells with values and formulas so AI has concrete evidence
+          adjacentCells: cells.slice(0, 16).map((c: any) => ({
+            coordinate: c.coordinate,
+            value: c.value,
+            type: c.type,
+            formula: c.formula,
+          })),
           cellCount: cells.length,
           note: cells.length > MAX_CONTEXT_CELLS
-            ? `Context has ${cells.length} cells. rowLabels and colLabels show the most relevant.`
+            ? `Context has ${cells.length} cells. Showing target, adjacentCells (up to 16), and row/col labels.`
             : undefined,
         };
       }
@@ -561,6 +742,21 @@ export class AgentService {
 YOUR MISSION: Convert a natural-language instruction into a safe, evidence-based operation plan.
 
 ═══════════════════════════════════════════════════
+MULTILINGUAL SUPPORT — CRITICAL
+═══════════════════════════════════════════════════
+
+You MUST understand and correctly process user instructions in ANY language — including but not limited to English, Urdu, Hindi, Arabic, Spanish, French, Chinese, Turkish, German, and all other languages.
+
+Rules for multilingual handling:
+- Parse the user's intent regardless of the language they write in.
+- If the user writes in Urdu "Management Fee ko 1.5% kar do", understand it as "Set Management Fee to 1.5%".
+- If the user writes in Hindi "Q4 ke liye nayi row add karo", understand it as "Add a new row for Q4".
+- If the user writes in Arabic or any other script, translate the intent internally and execute correctly.
+- Always search for English labels/headers in the workbook because Excel workbooks typically use English cell labels — even if the user's instruction is in another language.
+- Your internal reasoning and tool calls remain in English, but your clarification questions (if needed) should be in the SAME language the user used.
+- Never reject or fail on an instruction just because it is not in English.
+
+═══════════════════════════════════════════════════
 CORE PRINCIPLES — READ THESE CAREFULLY
 ═══════════════════════════════════════════════════
 
@@ -579,6 +775,17 @@ If the target label appears in more than one location, or if the instruction is 
 
 PRINCIPLE 4 — FORMULA SAFETY:
 Never include a formula cell in your plan unless the user explicitly said to replace it. If a cell contains a formula, return clarification_required — never overwrite silently.
+
+PRINCIPLE 5 — COMPLEX FINANCIAL DATA & PAST FUNDS:
+When instructions mention past funds, historical funds, vintage years, or multi-fund comparisons (e.g. "past funds ko edit karo", "Fund I", "Fund II", "Historical Fund performance"):
+- Financial workbooks often have multiple funds listed across rows or across different sheets.
+- You MUST search for "Fund", the fund's name, or inspect the sections of the sheet.
+- If there are multiple funds and the user did NOT specify which past fund or which metric to update, NEVER guess. Return clarification_required listing each fund and metric found.
+- If the user specifies the fund (e.g. "Fund I" or "Past Fund 2020"), inspect with get_cell_context to confirm both the fund label and the exact column (e.g. NAV, Committed Capital, IRR, Distribution, Management Fee).
+- Never hallucinate row or column indices. Cite the exact tool match in your reasoning.
+
+PRINCIPLE 6 — EVIDENCE CHAIN REQUIREMENT:
+Every single coordinate in your final_plan MUST have been discovered in a tool result during this conversation. In your reasoning field, you MUST explicitly cite the tool result that provided that coordinate (e.g., "Discovered via search_workbook at B14, verified via get_cell_context"). If you cannot cite a tool result, you MUST call a tool first.
 
 ═══════════════════════════════════════════════════
 YOUR WORKFLOW
@@ -643,6 +850,30 @@ Round 1: detect_sections({ sheetName: "Fund Overview" })
 Round 2: search_workbook({ query: "Management Fee", sheetName: "Fund Overview" })
 Result: 1 match A7, value B7 = 1.25, not formula
 Confidence: 9 → final_plan: SET_CELL Fund Overview row=7 col=2 value=X
+
+EXAMPLE 7 — Non-English or transliterated instruction (Urdu / Hindi / Arabic / other languages):
+User: "Fund Details sheet mein Management Fee ko 1.5% kar do" (Roman Urdu/Hindi: "Change management fee to 1.5% on Fund Details sheet")
+Round 1: search_workbook({ query: "Management Fee", sheetName: "Fund Details" })
+Result: 1 match — Fund Details sheet, A10
+Round 2: resolve_label({ label: "Management Fee", sheetName: "Fund Details" })
+Result: value cell is B10, current value 1.25, not a formula
+Confidence: 9 → final_plan: SET_CELL Fund Details row=10 col=2 value=1.5
+
+EXAMPLE 8 — Ambiguous Past Funds / Multiple Funds:
+User: "past funds ka IRR 14% kar do" (Urdu/Hindi: "Set IRR of past funds to 14%")
+Round 1: search_workbook({ query: "Fund" })
+Result: 3 fund rows found — "Fund I (2018)" at row 12, "Fund II (2020)" at row 13, "Fund III (2023)" at row 14
+Confidence: 3 → clarification_required:
+  question: "Found 3 funds in the workbook. Which fund's IRR would you like to update?"
+  candidates: ["Fund I (2018) — Row 12", "Fund II (2020) — Row 13", "Fund III (2023) — Row 14"]
+
+EXAMPLE 9 — Specific Past Fund edit with evidence:
+User: "Fund I ka committed capital 5000000 kar do"
+Round 1: search_workbook({ query: "Fund I" })
+Result: 1 match — Summary sheet, coordinate A12
+Round 2: get_cell_context({ sheetName: "Summary", coordinate: "A12" })
+Result: rowLabels: ["Fund I"], colLabels: ["Committed Capital" at col C], adjacentCells: C12 = 4500000 (numeric)
+Confidence: 9 → final_plan: SET_CELL Summary row=12 col=3 value=5000000
 
 ═══════════════════════════════════════════════════
 AVAILABLE TOOLS

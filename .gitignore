@@ -17,7 +17,7 @@ build/
 out/
 
 # Prisma
-prisma/migrations/
+# Note: prisma/migrations/ MUST be committed for `prisma migrate deploy` to work
 
 # Logs
 logs/

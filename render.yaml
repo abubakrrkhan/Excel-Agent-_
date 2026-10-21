@@ -23,7 +23,7 @@ services:
     plan: free
     nodeVersion: "20"
     rootDir: backend
-    buildCommand: npm ci && npx prisma generate && npm run build
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
     startCommand: npx prisma db push && npm run start
     healthCheckPath: /api/health
     envVars:
@@ -59,7 +59,7 @@ services:
     plan: free
     nodeVersion: "20"
     rootDir: frontend
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run start
     envVars:
       - key: NEXT_PUBLIC_API_URL

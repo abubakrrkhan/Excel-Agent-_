@@ -42,10 +42,7 @@ services:
           type: keyvalue
           property: connectionString
       - key: CORS_ORIGIN
-        fromService:
-          name: excel-ai-frontend
-          type: web
-          property: url
+        value: "*"
       - key: AI_API_KEY
         sync: false  # You'll set this manually in Render dashboard
       - key: AI_MODEL
@@ -65,7 +62,4 @@ services:
       - key: NODE_VERSION
         value: "20"
       - key: NEXT_PUBLIC_API_URL
-        fromService:
-          name: excel-ai-backend
-          type: web
-          property: url
+        value: "https://excel-ai-backend.onrender.com"

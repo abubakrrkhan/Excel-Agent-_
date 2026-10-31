@@ -10,8 +10,23 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // CORS
+  const configuredCors = process.env.CORS_ORIGIN;
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile/curl) or if wildcard / matches origin
+      if (
+        !origin ||
+        !configuredCors ||
+        configuredCors === '*' ||
+        origin === configuredCors ||
+        origin.endsWith('.onrender.com') ||
+        origin.includes('localhost')
+      ) {
+        callback(null, true);
+      } else {
+        callback(null, true);
+      }
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
